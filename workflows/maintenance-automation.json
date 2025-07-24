@@ -1,0 +1,570 @@
+
+{
+  "name": "Proxmox Maintenance Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "maintenance-workflow",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "maintenance-webhook",
+      "name": "Maintenance Workflow Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "maintenance-workflow"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.maintenance_type}}",
+              "operation": "equal",
+              "value2": "node_update"
+            }
+          ]
+        }
+      },
+      "id": "if-node-update",
+      "name": "Node Update?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.maintenance_type}}",
+              "operation": "equal",
+              "value2": "vm_maintenance"
+            }
+          ]
+        }
+      },
+      "id": "if-vm-maintenance",
+      "name": "VM Maintenance?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.maintenance_type}}",
+              "operation": "equal",
+              "value2": "storage_cleanup"
+            }
+          ]
+        }
+      },
+      "id": "if-storage-cleanup",
+      "name": "Storage Cleanup?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "message": "🔧 Starting Node Maintenance\n\nNode: {{$json.data.target.node}}\nMaintenance Type: {{$json.data.maintenance_type}}\nScheduled Time: {{$json.data.scheduled_time}}\n\nMigrating VMs to other nodes...",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-node-maintenance-start",
+      "name": "Notify Node Maintenance Start",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 100]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/vms",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "qs": {
+          "node": "={{$json.data.target.node}}"
+        },
+        "options": {}
+      },
+      "id": "get-node-vms",
+      "name": "Get Node VMs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Find available target nodes for migration\nconst sourceNode = $json.data.target.node;\nconst vms = $input.all()[1].json;\n\n// Get cluster nodes (this would normally come from an API call)\nconst availableNodes = ['node1', 'node2', 'node3'].filter(node => node !== sourceNode);\n\nconst migrationPlan = [];\nlet targetIndex = 0;\n\nfor (const vm of vms) {\n  if (vm.status === 'running') {\n    const targetNode = availableNodes[targetIndex % availableNodes.length];\n    migrationPlan.push({\n      vmid: vm.vmid,\n      name: vm.name,\n      sourceNode: sourceNode,\n      targetNode: targetNode\n    });\n    targetIndex++;\n  }\n}\n\nreturn migrationPlan.map(plan => ({ json: plan }));"
+      },
+      "id": "plan-vm-migration",
+      "name": "Plan VM Migration",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/vms/{{$json.vmid}}/migrate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "node",
+              "value": "={{$json.sourceNode}}"
+            },
+            {
+              "name": "target_node",
+              "value": "={{$json.targetNode}}"
+            },
+            {
+              "name": "config",
+              "value": "{\"online\": 1}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "migrate-vm",
+      "name": "Migrate VM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "wait-migration",
+      "name": "Wait for Migration",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/nodes/{{$json.data.target.node}}/update",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "options": {}
+      },
+      "id": "update-node",
+      "name": "Update Node",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1560, 200]
+    },
+    {
+      "parameters": {
+        "message": "🔧 VM Maintenance Started\n\nVM ID: {{$json.data.target.vmid}}\nVM Name: {{$json.data.target.name}}\nNode: {{$json.data.target.node}}\nMaintenance Type: {{$json.data.maintenance_type}}\n\nCreating snapshot before maintenance...",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-vm-maintenance-start",
+      "name": "Notify VM Maintenance Start",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 350]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/vms/{{$json.data.target.vmid}}/snapshot",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "node",
+              "value": "={{$json.data.target.node}}"
+            },
+            {
+              "name": "snapname",
+              "value": "pre-maintenance-{{$now}}"
+            },
+            {
+              "name": "description",
+              "value": "Snapshot before maintenance on {{$now}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-maintenance-snapshot",
+      "name": "Create Maintenance Snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [680, 450]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.maintenance_type}}",
+              "operation": "equal",
+              "value2": "vm_restart"
+            }
+          ]
+        }
+      },
+      "id": "if-vm-restart",
+      "name": "VM Restart?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 450]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/vms/{{$json.data.target.vmid}}/stop",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "node",
+              "value": "={{$json.data.target.node}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "stop-vm",
+      "name": "Stop VM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "id": "wait-vm-stop",
+      "name": "Wait VM Stop",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/vms/{{$json.data.target.vmid}}/start",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "node",
+              "value": "={{$json.data.target.node}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "start-vm",
+      "name": "Start VM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "message": "🧹 Storage Cleanup Started\n\nNode: {{$json.data.target.node}}\nStorage: {{$json.data.target.storage}}\nCleanup Type: {{$json.data.maintenance_type}}\n\nCleaning up old backups and unused volumes...",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-storage-cleanup-start",
+      "name": "Notify Storage Cleanup Start",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 550]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/backup/cleanup",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "node",
+              "value": "={{$json.data.target.node}}"
+            },
+            {
+              "name": "storage",
+              "value": "={{$json.data.target.storage}}"
+            },
+            {
+              "name": "keep_count",
+              "value": "5"
+            },
+            {
+              "name": "keep_days",
+              "value": "30"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cleanup-old-backups",
+      "name": "Cleanup Old Backups",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [680, 650]
+    },
+    {
+      "parameters": {
+        "message": "✅ Maintenance Completed Successfully!\n\nType: {{$json.data.maintenance_type}}\nTarget: {{$json.data.target}}\nCompleted: {{$now}}\n\nAll operations completed successfully.",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-maintenance-complete",
+      "name": "Notify Maintenance Complete",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1780, 400]
+    }
+  ],
+  "connections": {
+    "Maintenance Workflow Webhook": {
+      "main": [
+        [
+          {
+            "node": "Node Update?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "VM Maintenance?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Storage Cleanup?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node Update?": {
+      "main": [
+        [
+          {
+            "node": "Notify Node Maintenance Start",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Node VMs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VM Maintenance?": {
+      "main": [
+        [
+          {
+            "node": "Notify VM Maintenance Start",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Storage Cleanup?": {
+      "main": [
+        [
+          {
+            "node": "Notify Storage Cleanup Start",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Cleanup Old Backups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Node VMs": {
+      "main": [
+        [
+          {
+            "node": "Plan VM Migration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan VM Migration": {
+      "main": [
+        [
+          {
+            "node": "Migrate VM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Migrate VM": {
+      "main": [
+        [
+          {
+            "node": "Wait for Migration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Migration": {
+      "main": [
+        [
+          {
+            "node": "Update Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Node": {
+      "main": [
+        [
+          {
+            "node": "Notify Maintenance Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify VM Maintenance Start": {
+      "main": [
+        [
+          {
+            "node": "Create Maintenance Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Maintenance Snapshot": {
+      "main": [
+        [
+          {
+            "node": "VM Restart?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VM Restart?": {
+      "main": [
+        [
+          {
+            "node": "Stop VM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop VM": {
+      "main": [
+        [
+          {
+            "node": "Wait VM Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait VM Stop": {
+      "main": [
+        [
+          {
+            "node": "Start VM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start VM": {
+      "main": [
+        [
+          {
+            "node": "Notify Maintenance Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup Old Backups": {
+      "main": [
+        [
+          {
+            "node": "Notify Maintenance Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "versionId": "1",
+  "id": "maintenance-automation",
+  "meta": {
+    "instanceId": "proxmox-n8n-instance"
+  },
+  "tags": ["proxmox", "maintenance", "automation", "workflow"]
+}

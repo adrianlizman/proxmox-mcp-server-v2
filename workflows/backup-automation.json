@@ -1,0 +1,362 @@
+
+{
+  "name": "Proxmox Backup Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "daily-backup-trigger",
+      "name": "Daily Backup Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "backup-event",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "backup-webhook",
+      "name": "Backup Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 500],
+      "webhookId": "backup-event"
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/vms",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "options": {}
+      },
+      "id": "get-vms",
+      "name": "Get All VMs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/containers",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "options": {}
+      },
+      "id": "get-containers",
+      "name": "Get All Containers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Filter VMs that need backup (running and not templates)\nconst vms = $input.first().json;\nconst containers = $input.all()[1].json;\n\nconst backupTargets = [];\n\n// Add VMs\nfor (const vm of vms) {\n  if (vm.status === 'running' && !vm.template) {\n    backupTargets.push({\n      type: 'vm',\n      vmid: vm.vmid,\n      node: vm.node,\n      name: vm.name\n    });\n  }\n}\n\n// Add Containers\nfor (const container of containers) {\n  if (container.status === 'running') {\n    backupTargets.push({\n      type: 'container',\n      vmid: container.vmid,\n      node: container.node,\n      name: container.name\n    });\n  }\n}\n\nreturn backupTargets.map(target => ({ json: target }));"
+      },
+      "id": "filter-backup-targets",
+      "name": "Filter Backup Targets",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 350]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/backup/create",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "node",
+              "value": "={{$json.node}}"
+            },
+            {
+              "name": "vmid",
+              "value": "={{$json.vmid}}"
+            },
+            {
+              "name": "config",
+              "value": "={\"storage\": \"backup-storage\", \"mode\": \"snapshot\", \"compress\": \"zstd\", \"type\": \"{{$json.type}}\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-backup",
+      "name": "Create Backup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [900, 350]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.event_type}}",
+              "operation": "equal",
+              "value2": "completed"
+            }
+          ]
+        }
+      },
+      "id": "if-backup-completed",
+      "name": "Backup Completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.event_type}}",
+              "operation": "equal",
+              "value2": "failed"
+            }
+          ]
+        }
+      },
+      "id": "if-backup-failed",
+      "name": "Backup Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "message": "✅ Backup Completed Successfully!\n\nVM/CT ID: {{$json.data.backup.vmid}}\nType: {{$json.data.backup.type}}\nNode: {{$json.data.backup.node}}\nStorage: {{$json.data.backup.config.storage}}\n\nTime: {{$json.timestamp}}",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-backup-success",
+      "name": "Notify Backup Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 450]
+    },
+    {
+      "parameters": {
+        "message": "❌ Backup Failed!\n\nVM/CT ID: {{$json.data.backup.vmid}}\nType: {{$json.data.backup.type}}\nNode: {{$json.data.backup.node}}\nError: {{$json.data.backup.error}}\n\nTime: {{$json.timestamp}}\n\nPlease investigate immediately!",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-backup-failure",
+      "name": "Notify Backup Failure",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 550]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/backup/cleanup",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "node",
+              "value": "={{$json.data.backup.node}}"
+            },
+            {
+              "name": "storage",
+              "value": "backup-storage"
+            },
+            {
+              "name": "keep_count",
+              "value": "7"
+            },
+            {
+              "name": "keep_days",
+              "value": "30"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cleanup-old-backups",
+      "name": "Cleanup Old Backups",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [900, 450]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Generate backup report\nconst backupResults = $input.all();\nlet successCount = 0;\nlet failureCount = 0;\nconst failures = [];\n\nfor (const result of backupResults) {\n  if (result.json.status === 'started') {\n    successCount++;\n  } else {\n    failureCount++;\n    failures.push({\n      vmid: result.json.vmid,\n      error: result.json.error || 'Unknown error'\n    });\n  }\n}\n\nconst report = {\n  timestamp: new Date().toISOString(),\n  total_targets: backupResults.length,\n  successful: successCount,\n  failed: failureCount,\n  failures: failures\n};\n\nreturn [{ json: report }];"
+      },
+      "id": "generate-backup-report",
+      "name": "Generate Backup Report",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1120, 350]
+    },
+    {
+      "parameters": {
+        "message": "📊 Daily Backup Report\n\nDate: {{$json.timestamp}}\nTotal Targets: {{$json.total_targets}}\n✅ Successful: {{$json.successful}}\n❌ Failed: {{$json.failed}}\n\n{{#if failures}}Failed Backups:\n{{#each failures}}- VM/CT {{vmid}}: {{error}}\n{{/each}}{{/if}}",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "send-backup-report",
+      "name": "Send Backup Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1340, 350]
+    }
+  ],
+  "connections": {
+    "Daily Backup Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get All VMs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get All Containers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backup Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Backup Completed?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Backup Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All VMs": {
+      "main": [
+        [
+          {
+            "node": "Filter Backup Targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Containers": {
+      "main": [
+        [
+          {
+            "node": "Filter Backup Targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Backup Targets": {
+      "main": [
+        [
+          {
+            "node": "Create Backup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Backup": {
+      "main": [
+        [
+          {
+            "node": "Generate Backup Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backup Completed?": {
+      "main": [
+        [
+          {
+            "node": "Notify Backup Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backup Failed?": {
+      "main": [
+        [
+          {
+            "node": "Notify Backup Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Backup Success": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Old Backups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Backup Report": {
+      "main": [
+        [
+          {
+            "node": "Send Backup Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "versionId": "1",
+  "id": "backup-automation",
+  "meta": {
+    "instanceId": "proxmox-n8n-instance"
+  },
+  "tags": ["proxmox", "backup", "automation", "scheduled"]
+}

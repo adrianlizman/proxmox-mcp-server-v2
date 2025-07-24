@@ -1,0 +1,248 @@
+
+{
+  "name": "Proxmox VM Lifecycle Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vm-lifecycle",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-vm-lifecycle",
+      "name": "VM Lifecycle Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "vm-lifecycle"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.event_type}}",
+              "operation": "equal",
+              "value2": "created"
+            }
+          ]
+        }
+      },
+      "id": "if-vm-created",
+      "name": "VM Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.event_type}}",
+              "operation": "equal",
+              "value2": "started"
+            }
+          ]
+        }
+      },
+      "id": "if-vm-started",
+      "name": "VM Started?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.event_type}}",
+              "operation": "equal",
+              "value2": "stopped"
+            }
+          ]
+        }
+      },
+      "id": "if-vm-stopped",
+      "name": "VM Stopped?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 700]
+    },
+    {
+      "parameters": {
+        "message": "🚀 New VM Created!\n\nVM ID: {{$json.data.vm.vmid}}\nName: {{$json.data.vm.name}}\nNode: {{$json.data.vm.node}}\nStatus: {{$json.data.vm.status}}\n\nTime: {{$json.timestamp}}",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "telegram-vm-created",
+      "name": "Notify VM Created",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "message": "✅ VM Started Successfully!\n\nVM ID: {{$json.data.vm.vmid}}\nName: {{$json.data.vm.name}}\nNode: {{$json.data.vm.node}}\n\nTime: {{$json.timestamp}}",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "telegram-vm-started",
+      "name": "Notify VM Started",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "message": "⚠️ VM Stopped!\n\nVM ID: {{$json.data.vm.vmid}}\nName: {{$json.data.vm.name}}\nNode: {{$json.data.vm.node}}\n\nTime: {{$json.timestamp}}\n\nPlease check if this was planned.",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "telegram-vm-stopped",
+      "name": "Notify VM Stopped",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 600]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/vms/{{$json.data.vm.vmid}}/monitor",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "options": {}
+      },
+      "id": "start-monitoring",
+      "name": "Start VM Monitoring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [680, 800]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"processed\",\n  \"event_type\": \"{{$json.data.event_type}}\",\n  \"vm_id\": \"{{$json.data.vm.vmid}}\",\n  \"timestamp\": \"{{$json.timestamp}}\"\n}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "VM Lifecycle Webhook": {
+      "main": [
+        [
+          {
+            "node": "VM Created?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "VM Started?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "VM Stopped?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VM Created?": {
+      "main": [
+        [
+          {
+            "node": "Notify VM Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VM Started?": {
+      "main": [
+        [
+          {
+            "node": "Notify VM Started",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Start VM Monitoring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VM Stopped?": {
+      "main": [
+        [
+          {
+            "node": "Notify VM Stopped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify VM Created": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify VM Started": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify VM Stopped": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start VM Monitoring": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "versionId": "1",
+  "id": "vm-lifecycle-automation",
+  "meta": {
+    "instanceId": "proxmox-n8n-instance"
+  },
+  "tags": ["proxmox", "vm", "lifecycle", "automation"]
+}

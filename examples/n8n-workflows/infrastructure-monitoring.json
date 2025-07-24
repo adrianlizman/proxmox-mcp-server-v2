@@ -1,0 +1,177 @@
+{
+  "name": "Proxmox Infrastructure Monitoring",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "secondsInterval": 5
+            }
+          ]
+        }
+      },
+      "name": "Schedule Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://172.32.0.200:8000/proxmox/nodes",
+        "options": {}
+      },
+      "name": "Get Proxmox Nodes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process nodes and get VMs for each\nconst nodes = items[0].json.nodes;\nconst results = [];\n\nfor (const node of nodes) {\n  results.push({\n    json: {\n      node_name: node.node,\n      status: node.status,\n      uptime: node.uptime,\n      memory_used: node.mem,\n      memory_total: node.maxmem,\n      cpu_usage: node.cpu\n    }\n  });\n}\n\nreturn results;"
+      },
+      "name": "Process Node Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://172.32.0.200:8000/proxmox/node/{{$json[\"node_name\"]}}/vms",
+        "options": {}
+      },
+      "name": "Get VMs for Node",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Check for VM issues\nconst vms = items[0].json.vms;\nconst issues = [];\n\nfor (const vm of vms) {\n  if (vm.status !== 'running' && vm.template !== 1) {\n    issues.push({\n      vmid: vm.vmid,\n      name: vm.name,\n      status: vm.status,\n      node: vm.node,\n      issue_type: 'vm_not_running'\n    });\n  }\n  \n  // Check resource usage if available\n  if (vm.cpu && vm.cpu > 0.9) {\n    issues.push({\n      vmid: vm.vmid,\n      name: vm.name,\n      status: vm.status,\n      node: vm.node,\n      issue_type: 'high_cpu_usage',\n      cpu_usage: vm.cpu\n    });\n  }\n}\n\nreturn [{\n  json: {\n    node: items[0].json.node_name,\n    issues: issues,\n    has_issues: issues.length > 0,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Check for Issues",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json[\"has_issues\"]}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Has Issues?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "monitoring@yourdomain.com",
+        "toEmail": "admin@yourdomain.com",
+        "subject": "Proxmox Infrastructure Alert",
+        "text": "Issues detected in Proxmox infrastructure:\n\nNode: {{$json[\"node\"]}}\nTimestamp: {{$json[\"timestamp\"]}}\n\nIssues:\n{{$json[\"issues\"]}}",
+        "options": {}
+      },
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Proxmox Nodes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Proxmox Nodes": {
+      "main": [
+        [
+          {
+            "node": "Process Node Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Node Data": {
+      "main": [
+        [
+          {
+            "node": "Get VMs for Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get VMs for Node": {
+      "main": [
+        [
+          {
+            "node": "Check for Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Issues": {
+      "main": [
+        [
+          {
+            "node": "Has Issues?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Issues?": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

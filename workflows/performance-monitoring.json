@@ -1,0 +1,301 @@
+
+{
+  "name": "Proxmox Performance Monitoring",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "performance-check-trigger",
+      "name": "Performance Check (5min)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "performance-alert",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "performance-alert-webhook",
+      "name": "Performance Alert Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 500],
+      "webhookId": "performance-alert"
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/cluster/resources",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "options": {}
+      },
+      "id": "get-cluster-resources",
+      "name": "Get Cluster Resources",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Analyze resource usage and identify issues\nconst resources = $json;\nconst alerts = [];\n\n// Check nodes\nfor (const node of resources.nodes || []) {\n  const cpuUsage = (node.cpu / node.maxcpu) * 100;\n  const memUsage = (node.mem / node.maxmem) * 100;\n  const diskUsage = (node.disk / node.maxdisk) * 100;\n  \n  if (cpuUsage > 90) {\n    alerts.push({\n      type: 'high_cpu_usage',\n      resource_type: 'node',\n      resource_id: node.node,\n      severity: 'critical',\n      value: cpuUsage,\n      threshold: 90,\n      message: `Node ${node.node} CPU usage is ${cpuUsage.toFixed(1)}%`\n    });\n  } else if (cpuUsage > 80) {\n    alerts.push({\n      type: 'high_cpu_usage',\n      resource_type: 'node',\n      resource_id: node.node,\n      severity: 'warning',\n      value: cpuUsage,\n      threshold: 80,\n      message: `Node ${node.node} CPU usage is ${cpuUsage.toFixed(1)}%`\n    });\n  }\n  \n  if (memUsage > 90) {\n    alerts.push({\n      type: 'high_memory_usage',\n      resource_type: 'node',\n      resource_id: node.node,\n      severity: 'critical',\n      value: memUsage,\n      threshold: 90,\n      message: `Node ${node.node} memory usage is ${memUsage.toFixed(1)}%`\n    });\n  }\n  \n  if (diskUsage > 85) {\n    alerts.push({\n      type: 'high_disk_usage',\n      resource_type: 'node',\n      resource_id: node.node,\n      severity: diskUsage > 95 ? 'critical' : 'warning',\n      value: diskUsage,\n      threshold: 85,\n      message: `Node ${node.node} disk usage is ${diskUsage.toFixed(1)}%`\n    });\n  }\n}\n\n// Check VMs\nfor (const vm of resources.vms || []) {\n  if (vm.status !== 'running') continue;\n  \n  const cpuUsage = (vm.cpu / vm.maxcpu) * 100;\n  const memUsage = (vm.mem / vm.maxmem) * 100;\n  \n  if (cpuUsage > 95) {\n    alerts.push({\n      type: 'high_cpu_usage',\n      resource_type: 'vm',\n      resource_id: vm.vmid,\n      severity: 'critical',\n      value: cpuUsage,\n      threshold: 95,\n      message: `VM ${vm.vmid} (${vm.name}) CPU usage is ${cpuUsage.toFixed(1)}%`\n    });\n  }\n  \n  if (memUsage > 95) {\n    alerts.push({\n      type: 'high_memory_usage',\n      resource_type: 'vm',\n      resource_id: vm.vmid,\n      severity: 'critical',\n      value: memUsage,\n      threshold: 95,\n      message: `VM ${vm.vmid} (${vm.name}) memory usage is ${memUsage.toFixed(1)}%`\n    });\n  }\n}\n\n// Check containers\nfor (const container of resources.containers || []) {\n  if (container.status !== 'running') continue;\n  \n  const cpuUsage = (container.cpu / container.maxcpu) * 100;\n  const memUsage = (container.mem / container.maxmem) * 100;\n  \n  if (cpuUsage > 95) {\n    alerts.push({\n      type: 'high_cpu_usage',\n      resource_type: 'container',\n      resource_id: container.vmid,\n      severity: 'critical',\n      value: cpuUsage,\n      threshold: 95,\n      message: `Container ${container.vmid} (${container.name}) CPU usage is ${cpuUsage.toFixed(1)}%`\n    });\n  }\n  \n  if (memUsage > 95) {\n    alerts.push({\n      type: 'high_memory_usage',\n      resource_type: 'container',\n      resource_id: container.vmid,\n      severity: 'critical',\n      value: memUsage,\n      threshold: 95,\n      message: `Container ${container.vmid} (${container.name}) memory usage is ${memUsage.toFixed(1)}%`\n    });\n  }\n}\n\nreturn alerts.map(alert => ({ json: alert }));"
+      },
+      "id": "analyze-performance",
+      "name": "Analyze Performance",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.severity}}",
+              "operation": "equal",
+              "value2": "critical"
+            }
+          ]
+        }
+      },
+      "id": "if-critical-alert",
+      "name": "Critical Alert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.data.severity}}",
+              "operation": "equal",
+              "value2": "critical"
+            }
+          ]
+        }
+      },
+      "id": "if-webhook-critical",
+      "name": "Webhook Critical?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 500]
+    },
+    {
+      "parameters": {
+        "message": "🚨 CRITICAL PERFORMANCE ALERT!\n\nType: {{$json.type}}\nResource: {{$json.resource_type}} {{$json.resource_id}}\nValue: {{$json.value}}%\nThreshold: {{$json.threshold}}%\n\n{{$json.message}}\n\nImmediate action required!",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-critical-alert",
+      "name": "Notify Critical Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "message": "⚠️ Performance Warning\n\nType: {{$json.type}}\nResource: {{$json.resource_type}} {{$json.resource_id}}\nValue: {{$json.value}}%\nThreshold: {{$json.threshold}}%\n\n{{$json.message}}",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-warning-alert",
+      "name": "Notify Warning Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "message": "🚨 CRITICAL: {{$json.data.message}}\n\nAlert Type: {{$json.data.alert_type}}\nSeverity: {{$json.data.severity}}\nResource: {{$json.data.resource.resource_type}} {{$json.data.resource.resource_id}}\n\nTime: {{$json.timestamp}}\n\nImmediate investigation required!",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-webhook-critical",
+      "name": "Notify Webhook Critical",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 450]
+    },
+    {
+      "parameters": {
+        "message": "⚠️ Performance Alert: {{$json.data.message}}\n\nAlert Type: {{$json.data.alert_type}}\nSeverity: {{$json.data.severity}}\nResource: {{$json.data.resource.resource_type}} {{$json.data.resource.resource_id}}\n\nTime: {{$json.timestamp}}",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "notify-webhook-warning",
+      "name": "Notify Webhook Warning",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [680, 550]
+    },
+    {
+      "parameters": {
+        "url": "http://proxmox-mcp-server:8080/api/v1/ai/analyze-performance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "httpHeaderAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{$credentials.proxmox_api_token}}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "resource_type",
+              "value": "={{$json.resource_type}}"
+            },
+            {
+              "name": "resource_id",
+              "value": "={{$json.resource_id}}"
+            },
+            {
+              "name": "alert_data",
+              "value": "={{$json}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-ai-recommendations",
+      "name": "Get AI Recommendations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "message": "🤖 AI Performance Analysis\n\nResource: {{$json.resource_type}} {{$json.resource_id}}\n\nRecommendations:\n{{$json.ai_recommendations}}\n\nAutomated Suggestions:\n{{#each automated_suggestions}}- {{this}}\n{{/each}}",
+        "chatId": "@proxmox_alerts"
+      },
+      "id": "send-ai-recommendations",
+      "name": "Send AI Recommendations",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1560, 200]
+    }
+  ],
+  "connections": {
+    "Performance Check (5min)": {
+      "main": [
+        [
+          {
+            "node": "Get Cluster Resources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Performance Alert Webhook": {
+      "main": [
+        [
+          {
+            "node": "Webhook Critical?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Cluster Resources": {
+      "main": [
+        [
+          {
+            "node": "Analyze Performance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Performance": {
+      "main": [
+        [
+          {
+            "node": "Critical Alert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critical Alert?": {
+      "main": [
+        [
+          {
+            "node": "Notify Critical Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Warning Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Critical?": {
+      "main": [
+        [
+          {
+            "node": "Notify Webhook Critical",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Webhook Warning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Critical Alert": {
+      "main": [
+        [
+          {
+            "node": "Get AI Recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get AI Recommendations": {
+      "main": [
+        [
+          {
+            "node": "Send AI Recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "versionId": "1",
+  "id": "performance-monitoring",
+  "meta": {
+    "instanceId": "proxmox-n8n-instance"
+  },
+  "tags": ["proxmox", "performance", "monitoring", "alerts"]
+}

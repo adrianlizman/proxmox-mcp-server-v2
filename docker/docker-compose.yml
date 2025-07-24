@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  proxmox-mcp-server:
+    build: .
+    container_name: proxmox-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PROXMOX_HOST=172.32.0.11
+      - PROXMOX_USER=root@pam
+      - PROXMOX_PASSWORD=${PROXMOX_PASSWORD}
+      - PROXMOX_VERIFY_SSL=false
+      - OLLAMA_HOST=172.32.2.71
+      - OLLAMA_PORT=11434
+      - MCP_SERVER_PORT=8000
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - proxmox-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  proxmox-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
