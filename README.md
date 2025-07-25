@@ -1,6 +1,7 @@
 # Proxmox MCP Server
 
 A beginner-friendly Model Context Protocol (MCP) server for Proxmox Virtual Environment integration with AI workflows.
+<img width="1129" height="794" alt="image" src="https://github.com/user-attachments/assets/bf1fb08a-e11a-4187-8790-8dc0dcb1d7d3" />
 
 ## Features
 
